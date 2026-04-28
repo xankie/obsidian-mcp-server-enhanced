@@ -45,6 +45,7 @@ import { registerObsidianBlockReferenceTool } from "./tools/obsidianBlockReferen
 import { registerObsidianGraphAnalysisTool } from "./tools/obsidianGraphAnalysisTool/index.js";
 import { registerObsidianTemplateSystemTool } from "./tools/obsidianTemplateSystemTool/index.js";
 import { registerObsidianSmartLinkingTool } from "./tools/obsidianSmartLinkingTool/index.js";
+import { registerObsidianBatchReadFilesTool } from "./tools/obsidianBatchReadFilesTool/index.js";
 // Import transport setup functions.
 import { startHttpTransport } from "./transports/httpTransportNative.js";
 import { connectStdioTransport } from "./transports/stdioTransport.js";
@@ -122,7 +123,8 @@ async function createMcpServerInstance(
     await registerObsidianDeleteFileTool(server, vaultManager);
     await registerObsidianTaskQueryTool(server, vaultManager);
     await registerObsidianTasksQueryBuilderTool(server, vaultManager);
-    
+    await registerObsidianBatchReadFilesTool(server, vaultManager);
+
     // Register tools using compatibility bridge (legacy signatures)
     if (config.obsidianEnableCache && defaultVaultCacheService) {
       await registerObsidianGlobalSearchTool(server, defaultObsidianService, defaultVaultCacheService);
