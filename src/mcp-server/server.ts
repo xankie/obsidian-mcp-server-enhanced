@@ -130,17 +130,9 @@ async function createMcpServerInstance(
     await registerObsidianManageTagsTool(server, vaultManager);
     await registerObsidianCreateTaskTool(server, vaultManager);
     await registerObsidianUpdateTaskTool(server, vaultManager);
+    await registerObsidianGlobalSearchTool(server, vaultManager);
 
     // Register tools using compatibility bridge (legacy signatures)
-    if (config.obsidianEnableCache && defaultVaultCacheService) {
-      await registerObsidianGlobalSearchTool(server, defaultObsidianService, defaultVaultCacheService);
-    } else {
-      logger.warning(
-        "Skipping registration of 'obsidian_global_search' because the Vault Cache Service is disabled.",
-        context,
-      );
-    }
-
     await registerObsidianDataviewQueryTool(server, defaultObsidianService);
     await registerObsidianPeriodicNotesTool(server, defaultObsidianService);
     await registerObsidianBlockReferenceTool(server, defaultObsidianService);

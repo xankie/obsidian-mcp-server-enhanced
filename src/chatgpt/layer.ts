@@ -326,13 +326,13 @@ async function executeAction(
 
   switch (request.action) {
     case "searchNotes": {
-      const cacheService =
-        options.vaultManager.getVaultCacheService(vaultId, actionContext);
       const payload = await processObsidianGlobalSearch(
-        request.parameters,
+        {
+          ...request.parameters,
+          vault: vaultId,
+        },
         actionContext,
-        obsidianService,
-        cacheService,
+        options.vaultManager,
       );
       return { vaultId, payload };
     }
