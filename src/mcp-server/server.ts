@@ -124,6 +124,12 @@ async function createMcpServerInstance(
     await registerObsidianTaskQueryTool(server, vaultManager);
     await registerObsidianTasksQueryBuilderTool(server, vaultManager);
     await registerObsidianBatchReadFilesTool(server, vaultManager);
+    await registerObsidianSearchReplaceTool(server, vaultManager);
+    await registerObsidianUpdateFileTool(server, vaultManager);
+    await registerObsidianManageFrontmatterTool(server, vaultManager);
+    await registerObsidianManageTagsTool(server, vaultManager);
+    await registerObsidianCreateTaskTool(server, vaultManager);
+    await registerObsidianUpdateTaskTool(server, vaultManager);
 
     // Register tools using compatibility bridge (legacy signatures)
     if (config.obsidianEnableCache && defaultVaultCacheService) {
@@ -134,14 +140,8 @@ async function createMcpServerInstance(
         context,
       );
     }
-    
-    await registerObsidianSearchReplaceTool(server, defaultObsidianService, defaultVaultCacheService);
-    await registerObsidianUpdateFileTool(server, defaultObsidianService, defaultVaultCacheService);
-    await registerObsidianManageFrontmatterTool(server, defaultObsidianService, defaultVaultCacheService);
-    await registerObsidianManageTagsTool(server, defaultObsidianService, defaultVaultCacheService);
+
     await registerObsidianDataviewQueryTool(server, defaultObsidianService);
-    await registerObsidianCreateTaskTool(server, defaultObsidianService);
-    await registerObsidianUpdateTaskTool(server, defaultObsidianService);
     await registerObsidianPeriodicNotesTool(server, defaultObsidianService);
     await registerObsidianBlockReferenceTool(server, defaultObsidianService);
     await registerObsidianGraphAnalysisTool(server, defaultObsidianService);

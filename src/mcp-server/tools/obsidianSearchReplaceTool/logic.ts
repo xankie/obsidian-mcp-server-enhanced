@@ -3,8 +3,8 @@ import { z } from "zod";
 import {
   NoteJson,
   ObsidianRestApiService,
-  VaultCacheService,
 } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   createFormattedStatWithTokenCount,
@@ -112,6 +112,13 @@ const BaseObsidianSearchReplaceInputSchema = z.object({
     .default(false)
     .describe(
       "If true, returns the final content of the file in the response. Defaults to false.",
+    ),
+  /** The ID of the vault to write to. If not specified, uses the default vault. */
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
 });
 
@@ -321,8 +328,7 @@ async function getFinalState(
 export const processObsidianSearchReplace = async (
   params: ObsidianSearchReplaceInput, // Use the refined, validated type
   context: RequestContext,
-  obsidianService: ObsidianRestApiService,
-  vaultCacheService: VaultCacheService | undefined,
+  vaultManager: VaultManager,
 ): Promise<ObsidianSearchReplaceResponse> => {
   // Destructure validated parameters for easier access
   const {
@@ -335,7 +341,12 @@ export const processObsidianSearchReplace = async (
     flexibleWhitespace, // Note: Cannot be true if initialUseRegex is true (enforced by schema)
     wholeWord,
     returnContent,
+    vault: vaultId,
   } = params;
+
+  const obsidianService = vaultManager.getVaultService(vaultId, context);
+  const vaultCacheService = vaultManager.getVaultCacheService(vaultId, context);
+  const vaultConfig = vaultManager.getVaultConfig(vaultId);
 
   let effectiveFilePath = targetIdentifier; // Store the path used (might be updated by fallback)
   let targetDescription = targetIdentifier ?? "active file"; // For logging and error messages
@@ -349,6 +360,8 @@ export const processObsidianSearchReplace = async (
     flexibleWhitespace,
     wholeWord,
     returnContent,
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
 
   // --- Step 1: Read Initial Content (with case-insensitive fallback for filePath) ---

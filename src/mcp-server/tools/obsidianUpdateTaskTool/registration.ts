@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   ErrorHandler,
@@ -33,7 +33,7 @@ import {
  */
 export const registerObsidianUpdateTaskTool = async (
   server: McpServer,
-  obsidianService: ObsidianRestApiService,
+  vaultManager: VaultManager,
 ): Promise<void> => {
   const toolName = "obsidian_update_task";
   const toolDescription = `Update and modify existing tasks in Obsidian with comprehensive operation support.
@@ -146,7 +146,7 @@ This tool provides extensive task modification capabilities with precise task id
                 await obsidianUpdateTaskLogic(
                   params,
                   handlerContext,
-                  obsidianService,
+                  vaultManager,
                 );
 
               logger.debug(

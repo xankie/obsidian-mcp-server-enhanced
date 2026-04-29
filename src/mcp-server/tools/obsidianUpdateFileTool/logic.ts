@@ -2,8 +2,8 @@ import { z } from "zod";
 import {
   NoteJson,
   ObsidianRestApiService,
-  VaultCacheService,
 } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   createFormattedStatWithTokenCount,
@@ -65,6 +65,15 @@ const BaseUpdateSchema = z.object({
     .optional()
     .describe(
       "Identifier for 'filePath' (vault-relative path) or 'periodicNote' (period string). Not used for 'activeFile'.",
+    ),
+  /**
+   * The ID of the vault to write to. If not specified, uses the default vault.
+   */
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
 });
 
@@ -158,6 +167,13 @@ const ObsidianUpdateFileRegistrationSchema = z
       .optional()
       .default(false)
       .describe("If true, returns the final file content in the response."),
+    /** The ID of the vault to write to. If not specified, uses the default vault. */
+    vault: z
+      .string()
+      .optional()
+      .describe(
+        'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
+      ),
   })
   .describe(
     "Tool to modify Obsidian notes (specified by file path, active file, or periodic note) using whole-file operations: 'append', 'prepend', or 'overwrite'. Options control creation and overwrite behavior.",
@@ -339,13 +355,21 @@ async function getFinalState(
 export const processObsidianUpdateFile = async (
   params: ObsidianUpdateFileInput, // Use the refined, validated type
   context: RequestContext,
-  obsidianService: ObsidianRestApiService,
-  vaultCacheService: VaultCacheService | undefined,
+  vaultManager: VaultManager,
 ): Promise<ObsidianUpdateFileResponse> => {
+  const obsidianService = vaultManager.getVaultService(params.vault, context);
+  const vaultCacheService = vaultManager.getVaultCacheService(
+    params.vault,
+    context,
+  );
+  const vaultConfig = vaultManager.getVaultConfig(params.vault);
+
   logger.debug(`Processing obsidian_update_file request (wholeFile mode)`, {
     ...context,
     targetType: params.targetType,
     wholeFileMode: params.wholeFileMode,
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
 
   const targetId = params.targetIdentifier; // Alias for clarity

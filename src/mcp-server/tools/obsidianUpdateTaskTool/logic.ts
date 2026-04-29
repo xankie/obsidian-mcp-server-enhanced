@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   ErrorHandler,
@@ -58,6 +59,14 @@ export const UpdateTaskInputSchema = z.object({
   // Search options when no line number provided
   searchInSection: z.string().optional(),
   exactMatch: z.boolean().default(true),
+
+  // Vault selection (multi-vault support)
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
+    ),
 });
 
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
@@ -399,10 +408,13 @@ function findTaskLine(
 export async function obsidianUpdateTaskLogic(
   input: UpdateTaskInput,
   context: RequestContext,
-  obsidianService: ObsidianRestApiService
+  vaultManager: VaultManager
 ): Promise<UpdateTaskResponse> {
   const startTime = Date.now();
-  
+
+  const obsidianService = vaultManager.getVaultService(input.vault, context);
+  const vaultConfig = vaultManager.getVaultConfig(input.vault);
+
   logger.info("Updating task with Obsidian Tasks plugin format", {
     ...context,
     operation: "updateTask",
@@ -412,6 +424,8 @@ export async function obsidianUpdateTaskLogic(
       lineNumber: input.lineNumber,
       taskText: input.taskText?.substring(0, 50),
     },
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
 
   try {

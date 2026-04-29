@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   ErrorHandler,
@@ -44,6 +45,14 @@ export const CreateTaskInputSchema = z.object({
   insertAt: z.enum(["top", "bottom", "after-heading"]).default("bottom"),
   indentLevel: z.number().int().min(0).max(6).default(0),
   listStyle: z.enum(["-", "*", "1."]).default("-"),
+
+  // Vault selection (multi-vault support)
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
+    ),
 });
 
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
@@ -295,10 +304,13 @@ function findInsertionPoint(
 export async function obsidianCreateTaskLogic(
   input: CreateTaskInput,
   context: RequestContext,
-  obsidianService: ObsidianRestApiService
+  vaultManager: VaultManager
 ): Promise<CreateTaskResponse> {
   const startTime = Date.now();
-  
+
+  const obsidianService = vaultManager.getVaultService(input.vault, context);
+  const vaultConfig = vaultManager.getVaultConfig(input.vault);
+
   logger.info("Creating new task with Obsidian Tasks plugin format", {
     ...context,
     operation: "createTask",
@@ -311,6 +323,8 @@ export async function obsidianCreateTaskLogic(
       useActiveFile: input.useActiveFile,
       usePeriodicNote: input.usePeriodicNote,
     },
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
 
   try {

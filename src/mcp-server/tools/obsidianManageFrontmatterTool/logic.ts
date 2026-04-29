@@ -2,10 +2,9 @@ import { z } from "zod";
 import { dump } from "js-yaml";
 import {
   NoteJson,
-  ObsidianRestApiService,
   PatchOptions,
-  VaultCacheService,
 } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   logger,
@@ -40,6 +39,12 @@ const ManageFrontmatterInputSchemaBase = z.object({
     .optional()
     .describe(
       "The value to assign when using the 'set' operation. Can be a string, number, boolean, array, or a JSON object.",
+    ),
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
 });
 
@@ -77,17 +82,22 @@ export interface ObsidianManageFrontmatterResponse {
 export const processObsidianManageFrontmatter = async (
   params: ObsidianManageFrontmatterInput,
   context: RequestContext,
-  obsidianService: ObsidianRestApiService,
-  vaultCacheService: VaultCacheService | undefined,
+  vaultManager: VaultManager,
 ): Promise<ObsidianManageFrontmatterResponse> => {
+  const { filePath, operation, key, value, vault: vaultId } = params;
+
+  const obsidianService = vaultManager.getVaultService(vaultId, context);
+  const vaultCacheService = vaultManager.getVaultCacheService(vaultId, context);
+  const vaultConfig = vaultManager.getVaultConfig(vaultId);
+
   logger.debug(`Processing obsidian_manage_frontmatter request`, {
     ...context,
     operation: params.operation,
     filePath: params.filePath,
     key: params.key,
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
-
-  const { filePath, operation, key, value } = params;
 
   const shouldRetryNotFound = (err: unknown) =>
     err instanceof McpError && err.code === BaseErrorCode.NOT_FOUND;

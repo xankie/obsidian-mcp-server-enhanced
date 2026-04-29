@@ -369,17 +369,23 @@ async function executeAction(
     }
     case "taskCreate": {
       const payload = await obsidianCreateTaskLogic(
-        request.parameters,
+        {
+          ...request.parameters,
+          vault: vaultId,
+        },
         actionContext,
-        obsidianService,
+        options.vaultManager,
       );
       return { vaultId, payload };
     }
     case "taskUpdate": {
       const payload = await obsidianUpdateTaskLogic(
-        request.parameters,
+        {
+          ...request.parameters,
+          vault: vaultId,
+        },
         actionContext,
-        obsidianService,
+        options.vaultManager,
       );
       return { vaultId, payload };
     }

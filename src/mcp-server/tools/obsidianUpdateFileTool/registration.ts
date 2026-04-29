@@ -1,8 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  ObsidianRestApiService,
-  VaultCacheService,
-} from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   ErrorHandler,
@@ -42,8 +39,7 @@ import {
  */
 export const registerObsidianUpdateFileTool = async (
   server: McpServer,
-  obsidianService: ObsidianRestApiService,
-  vaultCacheService: VaultCacheService | undefined,
+  vaultManager: VaultManager,
 ): Promise<void> => {
   const toolName = "obsidian_update_file";
   const toolDescription =
@@ -115,8 +111,7 @@ export const registerObsidianUpdateFileTool = async (
                 await processObsidianUpdateFile(
                   validatedParams,
                   handlerContext,
-                  obsidianService,
-                  vaultCacheService,
+                  vaultManager,
                 );
               logger.debug(
                 `'${toolName}' (wholeFile mode) processed successfully`,

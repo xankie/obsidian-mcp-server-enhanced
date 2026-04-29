@@ -5,7 +5,7 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   ErrorHandler,
@@ -33,7 +33,7 @@ import {
  */
 export const registerObsidianCreateTaskTool = async (
   server: McpServer,
-  obsidianService: ObsidianRestApiService,
+  vaultManager: VaultManager,
 ): Promise<void> => {
   const toolName = "obsidian_create_task";
   const toolDescription = `Create tasks in Obsidian with full Tasks plugin metadata support and intelligent targeting.
@@ -130,7 +130,7 @@ This tool creates properly formatted tasks with comprehensive metadata support, 
                 await obsidianCreateTaskLogic(
                   params,
                   handlerContext,
-                  obsidianService,
+                  vaultManager,
                 );
 
               logger.debug(

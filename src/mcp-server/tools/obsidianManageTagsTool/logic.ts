@@ -2,9 +2,8 @@ import { z } from "zod";
 import { dump } from "js-yaml";
 import {
   NoteJson,
-  ObsidianRestApiService,
-  VaultCacheService,
 } from "../../../services/obsidianRestAPI/index.js";
+import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   logger,
@@ -34,6 +33,12 @@ const ManageTagsInputSchemaBase = z.object({
     .describe(
       "An array of tag names to be processed. The '#' prefix should be omitted (e.g., use 'project/active', not '#project/active').",
     ),
+  vault: z
+    .string()
+    .optional()
+    .describe(
+      'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
+    ),
 });
 
 export const ObsidianManageTagsInputSchemaShape =
@@ -55,15 +60,21 @@ export interface ObsidianManageTagsResponse {
 export const processObsidianManageTags = async (
   params: ObsidianManageTagsInput,
   context: RequestContext,
-  obsidianService: ObsidianRestApiService,
-  vaultCacheService: VaultCacheService | undefined,
+  vaultManager: VaultManager,
 ): Promise<ObsidianManageTagsResponse> => {
+  const { filePath, operation, tags: inputTags, vault: vaultId } = params;
+
+  const obsidianService = vaultManager.getVaultService(vaultId, context);
+  const vaultCacheService = vaultManager.getVaultCacheService(vaultId, context);
+  const vaultConfig = vaultManager.getVaultConfig(vaultId);
+
   logger.debug(`Processing obsidian_manage_tags request`, {
     ...context,
     ...params,
+    vaultId: vaultConfig.id,
+    vaultName: vaultConfig.name,
   });
 
-  const { filePath, operation, tags: inputTags } = params;
   const sanitizedTags = inputTags.map((t) => sanitization.sanitizeTagName(t));
 
   const shouldRetryNotFound = (err: unknown) =>
