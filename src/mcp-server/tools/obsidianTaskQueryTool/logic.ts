@@ -668,13 +668,17 @@ async function executeTasksPluginQuery(
 ): Promise<TaskItem[]> {
   try {
     // Use Dataview to access Tasks plugin data with native query.
-    // Note: avoid Tasks-plugin-specific fields like task.status.symbol and
-    // task.priority.name which only exist when the Tasks plugin's Dataview
-    // extension is active. With vanilla Dataview, task.status is a string
-    // (the symbol char) and task.priority is undefined; priority/recurrence
-    // are recovered below by regex over task.text.
+    // Notes:
+    //  - The Local REST API's /search/ endpoint rejects "TABLE WITHOUT ID";
+    //    use plain TABLE. Named columns are still addressable by name on
+    //    result.result.
+    //  - Avoid Tasks-plugin-specific fields like task.status.symbol and
+    //    task.priority.name which only exist when the Tasks plugin's Dataview
+    //    extension is active. With vanilla Dataview, task.status is a string
+    //    (the symbol char) and task.priority is undefined; priority and
+    //    recurrence are recovered below by regex over task.text.
     const dataviewQuery = `
-TABLE WITHOUT ID
+TABLE
   task.text as Text,
   task.status as Status,
   task.due as DueDate,
@@ -864,10 +868,11 @@ export async function obsidianTaskQueryLogic(
       // Fallback to enhanced manual search and parsing
       let searchResults = new Map<string, any>();
       
-      // Try Dataview query for file discovery
+      // Try Dataview query for file discovery. Use plain TABLE — the Local
+      // REST API rejects "TABLE WITHOUT ID".
       try {
         const dataviewQuery = `
-TABLE WITHOUT ID file.link as File, length(file.tasks) as Tasks
+TABLE file.link as File, length(file.tasks) as Tasks
 WHERE length(file.tasks) > 0
 SORT file.name ASC
 LIMIT 100`;
