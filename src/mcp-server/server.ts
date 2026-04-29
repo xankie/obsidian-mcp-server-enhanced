@@ -112,11 +112,7 @@ async function createMcpServerInstance(
       "Registering resources and tools using VaultManager...",
       context,
     );
-    
-    // Get default services for compatibility with tools not yet updated
-    const defaultObsidianService = vaultManager.getVaultService();
-    const defaultVaultCacheService = vaultManager.getVaultCacheService();
-    
+
     // Register tools that have been updated to use VaultManager
     await registerObsidianReadFileTool(server, vaultManager);
     await registerObsidianListFilesTool(server, vaultManager);
@@ -131,14 +127,12 @@ async function createMcpServerInstance(
     await registerObsidianCreateTaskTool(server, vaultManager);
     await registerObsidianUpdateTaskTool(server, vaultManager);
     await registerObsidianGlobalSearchTool(server, vaultManager);
-
-    // Register tools using compatibility bridge (legacy signatures)
-    await registerObsidianDataviewQueryTool(server, defaultObsidianService);
-    await registerObsidianPeriodicNotesTool(server, defaultObsidianService);
-    await registerObsidianBlockReferenceTool(server, defaultObsidianService);
-    await registerObsidianGraphAnalysisTool(server, defaultObsidianService);
-    await registerObsidianTemplateSystemTool(server, defaultObsidianService);
-    await registerObsidianSmartLinkingTool(server, defaultObsidianService);
+    await registerObsidianDataviewQueryTool(server, vaultManager);
+    await registerObsidianPeriodicNotesTool(server, vaultManager);
+    await registerObsidianBlockReferenceTool(server, vaultManager);
+    await registerObsidianGraphAnalysisTool(server, vaultManager);
+    await registerObsidianTemplateSystemTool(server, vaultManager);
+    await registerObsidianSmartLinkingTool(server, vaultManager);
 
     logger.info("Resources and tools registered successfully", context);
 
