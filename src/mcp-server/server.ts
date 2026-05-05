@@ -20,6 +20,7 @@ import http from "http";
 import { config, environment } from "../config/index.js";
 // Import core utilities: ErrorHandler, logger, requestContextService.
 import { ErrorHandler, logger, requestContextService } from "../utils/index.js";
+import { instrumentMcpServerTools } from "../utils/internal/jsonlAuditLogger.js";
 // Import the Obsidian service
 import { ObsidianRestApiService } from "../services/obsidianRestAPI/index.js";
 // Import the Vault Cache service
@@ -106,6 +107,10 @@ async function createMcpServerInstance(
       },
     },
   );
+
+  // T3.1: wrap every tool handler with the JSONL audit logger before registration.
+  // No-op when MCP_AUDIT_LOG_ENABLED=false.
+  instrumentMcpServerTools(server);
 
   try {
     logger.debug(
