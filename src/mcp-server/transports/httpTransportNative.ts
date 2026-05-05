@@ -15,6 +15,11 @@ import {
   RequestContext,
   requestContextService,
 } from "../../utils/index.js";
+import {
+  getHealthMetrics,
+  handleHealthRequest,
+} from "../../utils/internal/healthMetrics.js";
+import { withAuditRequestContext } from "../../utils/internal/jsonlAuditLogger.js";
 import { VaultManager } from "../../services/vaultManager/index.js";
 import { handleChatGptLayerRequest } from "../../chatgpt/layer.js";
 
@@ -161,11 +166,29 @@ export async function startHttpTransport(
   }, SESSION_GC_INTERVAL_MS);
 
   const server = http.createServer(async (req, res) => {
+    // T3.3: track in-flight requests so /health.connection_count is meaningful.
+    const metrics = getHealthMetrics();
+    metrics.incActive();
+    let activeDecremented = false;
+    const decActiveOnce = () => {
+      if (activeDecremented) return;
+      activeDecremented = true;
+      metrics.decActive();
+    };
+    res.on("finish", decActiveOnce);
+    res.on("close", decActiveOnce);
+
     try {
       setCorsHeaders(res);
 
       const url = new URL(req.url!, `http://${req.headers.host}`);
-      
+
+      // T3.3: /health endpoint — no auth (localhost only per spec default).
+      if (url.pathname === "/health" && req.method === "GET") {
+        handleHealthRequest(res, metrics);
+        return;
+      }
+
       // Log all incoming requests for debugging
       const requestContext = requestContextService.createRequestContext({
         operation: "IncomingHTTPRequest",
@@ -226,6 +249,14 @@ export async function startHttpTransport(
         return;
       }
 
+      // T3.2: parse X-Context-Size-Estimate so downstream tool calls can stamp it.
+      const ctxRaw = req.headers["x-context-size-estimate"];
+      const ctxStr = Array.isArray(ctxRaw) ? ctxRaw[0] : ctxRaw;
+      const ctxNum =
+        ctxStr !== undefined ? Number.parseInt(String(ctxStr), 10) : NaN;
+      const contextSizeEstimate = Number.isFinite(ctxNum) ? ctxNum : null;
+
+      await withAuditRequestContext({ contextSizeEstimate }, async () => {
       const sessionId = req.headers["mcp-session-id"] as string;
       let transport: StreamableHTTPServerTransport | undefined;
       
@@ -356,6 +387,7 @@ export async function startHttpTransport(
         res.writeHead(405);
         res.end("Method Not Allowed");
       }
+      }); // end withAuditRequestContext
 
     } catch (err) {
       const errorContext = requestContextService.createRequestContext({

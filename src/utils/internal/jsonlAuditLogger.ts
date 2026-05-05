@@ -8,21 +8,46 @@
  *
  * @module src/utils/internal/jsonlAuditLogger
  */
+import { AsyncLocalStorage } from "async_hooks";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, statSync, promises as fsp } from "fs";
 import path from "path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { config } from "../../config/index.js";
+import { getHealthMetrics, HealthMetrics } from "./healthMetrics.js";
 import { logger } from "./logger.js";
 
 const DEFAULT_MAX_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
 const DEFAULT_MAX_FILES = 7;
+
+/**
+ * T3.2 — async-local request context. The HTTP transport reads
+ * X-Context-Size-Estimate per request and runs MCP dispatch inside
+ * `withAuditRequestContext`, so any tool handler invoked downstream
+ * sees the value via this store. The stdio transport never sets it,
+ * so context_size_estimate stays null there.
+ */
+export interface AuditRequestContext {
+  contextSizeEstimate?: number | null;
+}
+
+export const auditRequestContextStorage =
+  new AsyncLocalStorage<AuditRequestContext>();
+
+export function withAuditRequestContext<T>(
+  ctx: AuditRequestContext,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return auditRequestContextStorage.run(ctx, fn);
+}
 
 export interface AuditLoggerOptions {
   enabled: boolean;
   logPath: string;
   maxSizeBytes?: number;
   maxFiles?: number;
+  /** T3.3 — optional health metrics sink. Defaults to the process singleton. */
+  metrics?: HealthMetrics;
 }
 
 export interface AuditRow {
@@ -45,6 +70,7 @@ export class JsonlAuditLogger {
   private readonly logPath: string;
   private readonly maxSizeBytes: number;
   private readonly maxFiles: number;
+  private readonly metrics: HealthMetrics;
   private currentSize = 0;
   private inFlight: Promise<void> = Promise.resolve();
 
@@ -53,6 +79,7 @@ export class JsonlAuditLogger {
     this.logPath = opts.logPath;
     this.maxSizeBytes = opts.maxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
     this.maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
+    this.metrics = opts.metrics ?? getHealthMetrics();
 
     if (this.enabled) {
       this.initSync();
@@ -117,8 +144,11 @@ export class JsonlAuditLogger {
         elapsed_ms: Math.round(elapsedMs * 1000) / 1000,
         outcome,
         error_type: errorType,
-        context_size_estimate: null,
+        context_size_estimate:
+          auditRequestContextStorage.getStore()?.contextSizeEstimate ?? null,
       };
+      self.metrics.recordRequest();
+      if (outcome === "error") self.metrics.recordError();
       self.logCall(row);
       if (didThrow) throw thrown;
       return result;
