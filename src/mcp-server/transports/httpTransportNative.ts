@@ -249,14 +249,26 @@ export async function startHttpTransport(
         return;
       }
 
-      // T3.2: parse X-Context-Size-Estimate so downstream tool calls can stamp it.
-      const ctxRaw = req.headers["x-context-size-estimate"];
-      const ctxStr = Array.isArray(ctxRaw) ? ctxRaw[0] : ctxRaw;
-      const ctxNum =
-        ctxStr !== undefined ? Number.parseInt(String(ctxStr), 10) : NaN;
-      const contextSizeEstimate = Number.isFinite(ctxNum) ? ctxNum : null;
+      // T3.2: capture trace_id (from x-cloud-trace-context) and x-anthropic-client
+      // so the audit logger can stamp them on every tool-call row.
+      const traceCtxRaw = req.headers["x-cloud-trace-context"];
+      const traceCtxStr = Array.isArray(traceCtxRaw)
+        ? traceCtxRaw[0]
+        : traceCtxRaw;
+      let traceId: string | null = null;
+      if (typeof traceCtxStr === "string" && traceCtxStr.length > 0) {
+        const head = traceCtxStr.split("/")[0];
+        traceId = head && head.length > 0 ? head : null;
+      }
 
-      await withAuditRequestContext({ contextSizeEstimate }, async () => {
+      const clientRaw = req.headers["x-anthropic-client"];
+      const clientStr = Array.isArray(clientRaw) ? clientRaw[0] : clientRaw;
+      const clientType =
+        typeof clientStr === "string" && clientStr.length > 0
+          ? clientStr
+          : null;
+
+      await withAuditRequestContext({ traceId, clientType }, async () => {
       const sessionId = req.headers["mcp-session-id"] as string;
       let transport: StreamableHTTPServerTransport | undefined;
       

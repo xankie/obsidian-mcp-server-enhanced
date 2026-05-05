@@ -21,14 +21,16 @@ const DEFAULT_MAX_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
 const DEFAULT_MAX_FILES = 7;
 
 /**
- * T3.2 — async-local request context. The HTTP transport reads
- * X-Context-Size-Estimate per request and runs MCP dispatch inside
- * `withAuditRequestContext`, so any tool handler invoked downstream
- * sees the value via this store. The stdio transport never sets it,
- * so context_size_estimate stays null there.
+ * T3.2 — async-local request context. The HTTP transport extracts
+ * x-cloud-trace-context (Google Cloud Trace, used by Anthropic's
+ * proxy) and x-anthropic-client per request, then runs MCP dispatch
+ * inside `withAuditRequestContext`. Any tool handler invoked
+ * downstream sees these values via this store. The stdio transport
+ * never sets them, so trace_id and client_type stay null there.
  */
 export interface AuditRequestContext {
-  contextSizeEstimate?: number | null;
+  traceId?: string | null;
+  clientType?: string | null;
 }
 
 export const auditRequestContextStorage =
@@ -60,7 +62,8 @@ export interface AuditRow {
   elapsed_ms: number;
   outcome: "success" | "error";
   error_type: string | null;
-  context_size_estimate: number | null;
+  trace_id: string | null;
+  client_type: string | null;
 }
 
 type AnyHandler = (...args: unknown[]) => unknown;
@@ -134,6 +137,7 @@ export class JsonlAuditLogger {
         didThrow = true;
       }
       const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+      const reqCtx = auditRequestContextStorage.getStore();
       const row: AuditRow = {
         ts: new Date().toISOString(),
         request_id: randomUUID(),
@@ -144,8 +148,8 @@ export class JsonlAuditLogger {
         elapsed_ms: Math.round(elapsedMs * 1000) / 1000,
         outcome,
         error_type: errorType,
-        context_size_estimate:
-          auditRequestContextStorage.getStore()?.contextSizeEstimate ?? null,
+        trace_id: reqCtx?.traceId ?? null,
+        client_type: reqCtx?.clientType ?? null,
       };
       self.metrics.recordRequest();
       if (outcome === "error") self.metrics.recordError();

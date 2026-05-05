@@ -4,9 +4,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  HealthMetrics,
-} from "../src/utils/internal/healthMetrics.js";
+import { HealthMetrics } from "../src/utils/internal/healthMetrics.js";
 import {
   JsonlAuditLogger,
   withAuditRequestContext,
@@ -22,8 +20,8 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("T3.2 X-Context-Size-Estimate header capture", () => {
-  it("populates row.context_size_estimate when withAuditRequestContext supplies a numeric value", async () => {
+describe("T3.2 trace_id + client_type header capture", () => {
+  it("populates row.trace_id and row.client_type when withAuditRequestContext supplies them", async () => {
     const logPath = path.join(tmpDir, "audit.jsonl");
     // isolated metrics so concurrent tests don't pollute the singleton
     const auditor = new JsonlAuditLogger({
@@ -35,9 +33,12 @@ describe("T3.2 X-Context-Size-Estimate header capture", () => {
       content: [{ type: "text", text: "ok" }],
     }));
 
-    await withAuditRequestContext({ contextSizeEstimate: 95000 }, async () => {
-      await wrapped({ filePath: "x.md", vault: "default" });
-    });
+    await withAuditRequestContext(
+      { traceId: "abc123def456", clientType: "claude-web/0.1" },
+      async () => {
+        await wrapped({ filePath: "x.md", vault: "default" });
+      },
+    );
     await auditor.flush();
 
     const lines = (await readFile(logPath, "utf8"))
@@ -45,11 +46,13 @@ describe("T3.2 X-Context-Size-Estimate header capture", () => {
       .filter(Boolean);
     expect(lines).toHaveLength(1);
     const row = JSON.parse(lines[0]) as Record<string, unknown>;
-    expect(row.context_size_estimate).toBe(95000);
-    expect(typeof row.context_size_estimate).toBe("number");
+    expect(row.trace_id).toBe("abc123def456");
+    expect(typeof row.trace_id).toBe("string");
+    expect(row.client_type).toBe("claude-web/0.1");
+    expect(typeof row.client_type).toBe("string");
   });
 
-  it("leaves row.context_size_estimate null when no request context is set", async () => {
+  it("leaves row.trace_id and row.client_type null when no request context is set", async () => {
     const logPath = path.join(tmpDir, "audit.jsonl");
     const auditor = new JsonlAuditLogger({
       enabled: true,
@@ -69,6 +72,7 @@ describe("T3.2 X-Context-Size-Estimate header capture", () => {
       .filter(Boolean);
     expect(lines).toHaveLength(1);
     const row = JSON.parse(lines[0]) as Record<string, unknown>;
-    expect(row.context_size_estimate).toBeNull();
+    expect(row.trace_id).toBeNull();
+    expect(row.client_type).toBeNull();
   });
 });
