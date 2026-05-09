@@ -9,6 +9,9 @@ import {
   logger,
   RequestContext,
   retryWithDelay,
+  retryWithExponentialBackoff,
+  verifyContentMatch,
+  VerificationResult,
 } from "../../../utils/index.js";
 import { sanitization } from "../../../utils/security/sanitization.js";
 
@@ -39,6 +42,12 @@ const ManageTagsInputSchemaBase = z.object({
     .describe(
       'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe(
+      "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
+    ),
 });
 
 export const ObsidianManageTagsInputSchemaShape =
@@ -51,6 +60,8 @@ export interface ObsidianManageTagsResponse {
   success: boolean;
   message: string;
   currentTags: string[];
+  /** T1.3 — read-back verification result. */
+  verification?: VerificationResult;
 }
 
 // ====================================================================================
@@ -146,14 +157,13 @@ export const processObsidianManageTags = async (
         newContent = `---\n${newFrontmatterString}---\n\n${noteContent}`;
       }
 
-      await retryWithDelay(
+      // T1.2: exponential-backoff retry on the rewrite.
+      await retryWithExponentialBackoff(
         () => obsidianService.updateFileContent(filePath, newContent, context),
         {
-          operationName: `updateFileForTagAdd`,
+          operationName: "obsidian_manage_tags:add",
           context,
-          maxRetries: 3,
-          delayMs: 300,
-          shouldRetry: shouldRetryNotFound,
+          errorContext: { file: filePath, tagsToAdd },
         },
       );
 
@@ -161,11 +171,27 @@ export const processObsidianManageTags = async (
         await vaultCacheService.updateCacheForFile(filePath, context);
       }
 
+      // T1.3: hash-verify the post-write content.
+      const addVerification = await verifyContentMatch(
+        { kind: "filePath", path: filePath },
+        newContent,
+        obsidianService,
+        { ...context, operation: "verifyContentMatch" },
+      );
+      if (!addVerification.verified) {
+        throw new McpError(
+          BaseErrorCode.INTERNAL_ERROR,
+          `Tag add reported success but read-back verification failed: ${addVerification.reason}`,
+          { ...context, verification_error: true, verification: addVerification },
+        );
+      }
+
       const finalTags = [...new Set([...currentTags, ...tagsToAdd])];
       return {
         success: true,
         message: `Successfully added tags: ${tagsToAdd.join(", ")}.`,
         currentTags: finalTags,
+        verification: addVerification,
       };
     }
 
@@ -223,18 +249,36 @@ export const processObsidianManageTags = async (
         }
       }
 
+      let removeVerification: VerificationResult | undefined;
       if (frontmatterModified || inlineModified) {
-        await retryWithDelay(
+        // T1.2: exponential-backoff retry on the rewrite.
+        await retryWithExponentialBackoff(
           () =>
             obsidianService.updateFileContent(filePath, noteContent, context),
           {
-            operationName: `updateFileContentForTagRemove`,
+            operationName: "obsidian_manage_tags:remove",
             context,
-            maxRetries: 3,
-            delayMs: 300,
-            shouldRetry: shouldRetryNotFound,
+            errorContext: { file: filePath, tagsToRemove },
           },
         );
+        // T1.3: hash-verify.
+        removeVerification = await verifyContentMatch(
+          { kind: "filePath", path: filePath },
+          noteContent,
+          obsidianService,
+          { ...context, operation: "verifyContentMatch" },
+        );
+        if (!removeVerification.verified) {
+          throw new McpError(
+            BaseErrorCode.INTERNAL_ERROR,
+            `Tag remove reported success but read-back verification failed: ${removeVerification.reason}`,
+            {
+              ...context,
+              verification_error: true,
+              verification: removeVerification,
+            },
+          );
+        }
       }
 
       if (vaultCacheService) {
@@ -246,6 +290,7 @@ export const processObsidianManageTags = async (
         success: true,
         message: `Successfully removed tags: ${tagsToRemove.join(", ")}.`,
         currentTags: finalTags,
+        verification: removeVerification,
       };
     }
 

@@ -11,6 +11,10 @@ import {
   logger,
   RequestContext,
   retryWithDelay,
+  retryWithExponentialBackoff,
+  verifyContentMatch,
+  VerificationResult,
+  VerificationTarget,
 } from "../../../utils/index.js";
 
 // ====================================================================================
@@ -120,6 +124,13 @@ const BaseObsidianSearchReplaceInputSchema = z.object({
     .describe(
       'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
+  /** T1.4 — optional idempotency UUID. */
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe(
+      "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call is a no-op and returns the cached result.",
+    ),
 });
 
 // ====================================================================================
@@ -227,6 +238,8 @@ export interface ObsidianSearchReplaceResponse {
   stats?: FormattedStat;
   /** Optional final content of the file, included only if `returnContent` was true in the request. */
   finalContent?: string;
+  /** T1.3 — read-back hash verification result. */
+  verification?: VerificationResult;
 }
 
 // ====================================================================================
@@ -725,26 +738,40 @@ export const processObsidianSearchReplace = async (
         `Content changed. Writing modified content back to ${targetDescription}`,
         writeContext,
       );
-      // Use the effectiveFilePath determined during the read phase for filePath targets
-      if (targetType === "filePath") {
-        await obsidianService.updateFileContent(
+      // T1.2: wrap the API write in 1s/2s/4s exponential-backoff retry.
+      await retryWithExponentialBackoff(
+        async () => {
+          if (targetType === "filePath") {
+            await obsidianService.updateFileContent(
+              effectiveFilePath!,
+              modifiedContent,
+              writeContext,
+            );
+          } else if (targetType === "activeFile") {
+            await obsidianService.updateActiveFile(
+              modifiedContent,
+              writeContext,
+            );
+          } else {
+            await obsidianService.updatePeriodicNote(
+              targetPeriod!,
+              modifiedContent,
+              writeContext,
+            );
+          }
+        },
+        {
+          operationName: "obsidian_search_replace:write",
+          context: writeContext,
+          errorContext: {
+            file: effectiveFilePath ?? targetType,
+            replacements: totalReplacementsMade,
+          },
+        },
+      );
+      if (targetType === "filePath" && vaultCacheService) {
+        await vaultCacheService.updateCacheForFile(
           effectiveFilePath!,
-          modifiedContent,
-          writeContext,
-        );
-        if (vaultCacheService) {
-          await vaultCacheService.updateCacheForFile(
-            effectiveFilePath!,
-            writeContext,
-          );
-        }
-      } else if (targetType === "activeFile") {
-        await obsidianService.updateActiveFile(modifiedContent, writeContext);
-      } else {
-        // periodicNote
-        await obsidianService.updatePeriodicNote(
-          targetPeriod!,
-          modifiedContent,
           writeContext,
         );
       }
@@ -864,6 +891,41 @@ export const processObsidianSearchReplace = async (
     }
   }
 
+  // --- Step 3b: T1.3 Read-back hash verification (only when we actually wrote) ---
+  let verification: VerificationResult | undefined;
+  if (modifiedContent !== originalContent) {
+    const verifyTarget: VerificationTarget =
+      targetType === "filePath" && effectiveFilePath
+        ? { kind: "filePath", path: effectiveFilePath }
+        : targetType === "activeFile"
+          ? { kind: "activeFile" }
+          : { kind: "periodicNote", period: targetPeriod! };
+    verification = await verifyContentMatch(
+      verifyTarget,
+      modifiedContent,
+      obsidianService,
+      { ...context, operation: "verifyContentMatch" },
+    );
+    if (!verification.verified) {
+      logger.error(
+        `Search/replace verification failed for ${targetDescription} (reason=${verification.reason})`,
+        undefined,
+        { ...context, operation: "verifyContentMatch", verification },
+      );
+      throw new McpError(
+        BaseErrorCode.INTERNAL_ERROR,
+        `Search/replace reported success but read-back verification failed: ${verification.reason}`,
+        {
+          ...context,
+          verification_error: true,
+          expected_hash: verification.expected_hash,
+          actual_hash: verification.actual_hash,
+          reason: verification.reason,
+        },
+      );
+    }
+  }
+
   // --- Step 4: Construct and Return the Response ---
   const responseContext = { ...context, operation: "buildResponse" };
   let message: string;
@@ -907,6 +969,7 @@ export const processObsidianSearchReplace = async (
     message: message,
     totalReplacementsMade,
     stats: formattedStat,
+    verification,
   };
 
   // Include final content if requested and available.

@@ -6,12 +6,10 @@ import {
   logger,
   RequestContext,
   requestContextService,
+  runWriteTool,
 } from "../../../utils/index.js";
-// Import types for handler signature and response structure
-import type {
-  ObsidianUpdateFileRegistrationInput,
-  ObsidianUpdateFileResponse,
-} from "./logic.js";
+// Import types for handler signature
+import type { ObsidianUpdateFileRegistrationInput } from "./logic.js";
 // Import the Zod schema for validation and the core processing logic
 import {
   ObsidianUpdateFileInputSchema,
@@ -95,57 +93,32 @@ export const registerObsidianUpdateFileTool = async (
             handlerContext,
           );
 
-          // Wrap the core logic execution in a tryCatch block for handling errors during processing.
-          return await ErrorHandler.tryCatch(
-            async () => {
-              // Explicitly parse and validate the incoming parameters using the full Zod schema.
-              // This ensures type safety and adherence to constraints defined in logic.ts.
-              // While server.tool performs initial validation based on the shape,
-              // this step applies any stricter rules or refinements from the full schema.
+          // T1.2/T1.3/T1.4/T1.5 — runWriteTool wraps validation, retry,
+          // verification, idempotency caching, and structured error mapping.
+          return await runWriteTool({
+            toolName,
+            idempotencyKey: params.idempotency_key,
+            context: handlerContext,
+            errorContext: {
+              file: params.targetIdentifier,
+              targetType: params.targetType,
+              wholeFileMode: params.wholeFileMode,
+            },
+            handler: async () => {
               const validatedParams =
                 ObsidianUpdateFileInputSchema.parse(params);
-
-              // Delegate the actual file update logic to the dedicated processing function.
-              // Pass the validated parameters, the handler context, and the Obsidian service instance.
-              const response: ObsidianUpdateFileResponse =
-                await processObsidianUpdateFile(
-                  validatedParams,
-                  handlerContext,
-                  vaultManager,
-                );
+              const response = await processObsidianUpdateFile(
+                validatedParams,
+                handlerContext,
+                vaultManager,
+              );
               logger.debug(
                 `'${toolName}' (wholeFile mode) processed successfully`,
                 handlerContext,
               );
-
-              // Format the successful response from the logic function into the MCP CallToolResult structure.
-              // The response object (containing status, message, timestamp, stat, etc.) is serialized to JSON.
-              return {
-                content: [
-                  {
-                    type: "text", // Standard content type for structured data
-                    text: JSON.stringify(response, null, 2), // Pretty-print JSON for readability
-                  },
-                ],
-                isError: false, // Indicate successful execution
-              };
+              return response;
             },
-            {
-              // Configuration for the inner error handler (processing logic).
-              operation: `processing ${toolName} handler`,
-              context: handlerContext,
-              input: params, // Log the full raw input parameters if an error occurs during processing.
-              // Custom error mapping to ensure consistent McpError format.
-              errorMapper: (error: unknown) =>
-                new McpError(
-                  error instanceof McpError
-                    ? error.code
-                    : BaseErrorCode.INTERNAL_ERROR, // Use INTERNAL_ERROR as the fallback
-                  `Error processing ${toolName} tool: ${error instanceof Error ? error.message : "Unknown error"}`,
-                  { ...handlerContext }, // Include context in the error details
-                ),
-            },
-          ); // End of inner ErrorHandler.tryCatch
+          });
         },
       ); // End of server.tool call
 

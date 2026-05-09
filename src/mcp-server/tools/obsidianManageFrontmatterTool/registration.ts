@@ -6,11 +6,9 @@ import {
   logger,
   RequestContext,
   requestContextService,
+  runWriteTool,
 } from "../../../utils/index.js";
-import type {
-  ObsidianManageFrontmatterInput,
-  ObsidianManageFrontmatterResponse,
-} from "./logic.js";
+import type { ObsidianManageFrontmatterInput } from "./logic.js";
 import {
   ManageFrontmatterInputSchema,
   ObsidianManageFrontmatterInputSchemaShape,
@@ -50,46 +48,30 @@ export const registerObsidianManageFrontmatterTool = async (
             });
           logger.debug(`Handling '${toolName}' request`, handlerContext);
 
-          return await ErrorHandler.tryCatch(
-            async () => {
+          // T1.2/T1.3/T1.4/T1.5 — runWriteTool wraps validation, retry,
+          // verification, idempotency caching, and structured error mapping.
+          // The 'get' op is read-only; we still run it through the wrapper
+          // for uniform error shape, but it skips the idempotency cache
+          // unless the caller chose to pass a key.
+          return await runWriteTool({
+            toolName,
+            idempotencyKey: params.idempotency_key,
+            context: handlerContext,
+            errorContext: {
+              file: params.filePath,
+              op: params.operation,
+              key: params.key,
+            },
+            handler: async () => {
               const validatedParams =
                 ManageFrontmatterInputSchema.parse(params);
-
-              const response: ObsidianManageFrontmatterResponse =
-                await processObsidianManageFrontmatter(
-                  validatedParams,
-                  handlerContext,
-                  vaultManager,
-                );
-              logger.debug(
-                `'${toolName}' processed successfully`,
+              return await processObsidianManageFrontmatter(
+                validatedParams,
                 handlerContext,
+                vaultManager,
               );
-
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify(response, null, 2),
-                  },
-                ],
-                isError: false,
-              };
             },
-            {
-              operation: `processing ${toolName} handler`,
-              context: handlerContext,
-              input: params,
-              errorMapper: (error: unknown) =>
-                new McpError(
-                  error instanceof McpError
-                    ? error.code
-                    : BaseErrorCode.INTERNAL_ERROR,
-                  `Error processing ${toolName} tool: ${error instanceof Error ? error.message : "Unknown error"}`,
-                  { ...handlerContext },
-                ),
-            },
-          );
+          });
         },
       );
 

@@ -6,12 +6,10 @@ import {
   logger,
   RequestContext,
   requestContextService,
+  runWriteTool,
 } from "../../../utils/index.js";
 // Import necessary types and schemas from the logic file
-import type {
-  ObsidianSearchReplaceRegistrationInput,
-  ObsidianSearchReplaceResponse,
-} from "./logic.js";
+import type { ObsidianSearchReplaceRegistrationInput } from "./logic.js";
 import {
   ObsidianSearchReplaceInputSchema,
   ObsidianSearchReplaceInputSchemaShape,
@@ -94,61 +92,26 @@ export const registerObsidianSearchReplaceTool = async (
             });
           logger.debug(`Handling '${toolName}' request`, handlerContext);
 
-          // Wrap the core logic execution in a tryCatch block for handling errors during processing.
-          return await ErrorHandler.tryCatch(
-            async () => {
-              // **Crucial Step:** Explicitly parse and validate the raw input parameters using the
-              // *refined* Zod schema (`ObsidianSearchReplaceInputSchema`). This applies stricter rules
-              // and cross-field validations defined in logic.ts.
+          // T1.2/T1.3/T1.4/T1.5 — runWriteTool wraps validation, retry,
+          // verification, idempotency caching, and structured error mapping.
+          return await runWriteTool({
+            toolName,
+            idempotencyKey: params.idempotency_key,
+            context: handlerContext,
+            errorContext: {
+              file: params.targetIdentifier,
+              targetType: params.targetType,
+            },
+            handler: async () => {
               const validatedParams =
                 ObsidianSearchReplaceInputSchema.parse(params);
-              logger.debug(
-                `Input parameters successfully validated against refined schema.`,
+              return await processObsidianSearchReplace(
+                validatedParams,
                 handlerContext,
+                vaultManager,
               );
-
-              // Delegate the actual search/replace logic to the dedicated processing function.
-              // Pass the *validated* parameters, the handler context, and the Obsidian service instance.
-              const response: ObsidianSearchReplaceResponse =
-                await processObsidianSearchReplace(
-                  validatedParams,
-                  handlerContext,
-                  vaultManager,
-                );
-              logger.debug(
-                `'${toolName}' processed successfully`,
-                handlerContext,
-              );
-
-              // Format the successful response object from the logic function into the required MCP CallToolResult structure.
-              // The entire response object (containing success, message, count, stat, etc.) is serialized to JSON.
-              return {
-                content: [
-                  {
-                    type: "text", // Standard content type for structured JSON data
-                    text: JSON.stringify(response, null, 2), // Pretty-print JSON for readability
-                  },
-                ],
-                isError: false, // Indicate successful execution to the client
-              };
             },
-            {
-              // Configuration for the inner error handler (processing logic).
-              operation: `processing ${toolName} handler`,
-              context: handlerContext,
-              input: params, // Log the full raw input parameters if an error occurs during processing.
-              // Custom error mapping to ensure consistent McpError format is returned to the client.
-              errorMapper: (error: unknown) =>
-                new McpError(
-                  // Use the specific code from McpError if available, otherwise default to INTERNAL_ERROR.
-                  error instanceof McpError
-                    ? error.code
-                    : BaseErrorCode.INTERNAL_ERROR,
-                  `Error processing ${toolName} tool: ${error instanceof Error ? error.message : "Unknown error"}`,
-                  { ...handlerContext }, // Include context in the error details
-                ),
-            },
-          ); // End of inner ErrorHandler.tryCatch
+          });
         },
       ); // End of server.tool call
 

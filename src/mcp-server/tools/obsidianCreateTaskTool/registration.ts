@@ -12,12 +12,12 @@ import {
   logger,
   RequestContext,
   requestContextService,
+  runWriteTool,
 } from "../../../utils/index.js";
 import {
   CreateTaskInputSchema,
   obsidianCreateTaskLogic,
   type CreateTaskInput,
-  type CreateTaskResponse,
 } from "./logic.js";
 
 /**
@@ -122,39 +122,25 @@ This tool creates properly formatted tasks with comprehensive metadata support, 
 
           logger.debug(`Handling '${toolName}' request`, handlerContext);
 
-          // Wrap the core logic execution in a tryCatch block
-          return await ErrorHandler.tryCatch(
-            async () => {
-              // Execute the task creation logic
-              const response: CreateTaskResponse =
-                await obsidianCreateTaskLogic(
-                  params,
-                  handlerContext,
-                  vaultManager,
-                );
-
-              logger.debug(
-                `'${toolName}' processed successfully`,
+          // T1.2/T1.3/T1.4/T1.5 — runWriteTool wraps validation, retry,
+          // verification, idempotency caching, and structured error mapping.
+          return await runWriteTool({
+            toolName,
+            idempotencyKey: params.idempotency_key,
+            context: handlerContext,
+            errorContext: {
+              file: params.filePath,
+              useActiveFile: params.useActiveFile,
+              usePeriodicNote: params.usePeriodicNote,
+            },
+            handler: async () => {
+              return await obsidianCreateTaskLogic(
+                params,
                 handlerContext,
+                vaultManager,
               );
-
-              // Format the successful response object into the required MCP CallToolResult structure
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify(response, null, 2),
-                  },
-                ],
-                isError: false,
-              };
             },
-            {
-              operation: `processing ${toolName} handler`,
-              context: handlerContext,
-              input: { ...params, text: params.text.substring(0, 50) },
-            },
-          );
+          });
         },
       );
 

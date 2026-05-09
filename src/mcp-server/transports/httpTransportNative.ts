@@ -20,12 +20,14 @@ import {
   handleHealthRequest,
 } from "../../utils/internal/healthMetrics.js";
 import { withAuditRequestContext } from "../../utils/internal/jsonlAuditLogger.js";
+import { getKeepaliveStatus } from "../../utils/internal/keepalive.js";
 import { VaultManager } from "../../services/vaultManager/index.js";
 import { handleChatGptLayerRequest } from "../../chatgpt/layer.js";
 
 const HTTP_PORT = config.mcpHttpPort;
 const HTTP_HOST = config.mcpHttpHost;
 const MCP_ENDPOINT_PATH = "/mcp";
+const SERVER_START_TIME = Date.now();
 
 /**
  * Stores active `StreamableHTTPServerTransport` instances, keyed by session ID.
@@ -186,6 +188,25 @@ export async function startHttpTransport(
       // T3.3: /health endpoint — no auth (localhost only per spec default).
       if (url.pathname === "/health" && req.method === "GET") {
         handleHealthRequest(res, metrics);
+        return;
+      }
+
+      // T1.1: /ping endpoint — tiny liveness probe for external monitors
+      // (Tailscale, uptime checkers, smoke tests). No auth, intentional.
+      if (url.pathname === "/ping" && req.method === "GET") {
+        const keepalive = getKeepaliveStatus();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            uptime_ms: Date.now() - SERVER_START_TIME,
+            keepalive: {
+              running: keepalive.running,
+              lastSuccessAt: keepalive.lastSuccessAt,
+              lastFailureAt: keepalive.lastFailureAt,
+            },
+          }),
+        );
         return;
       }
 

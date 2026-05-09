@@ -12,6 +12,9 @@ import {
   ErrorHandler,
   logger,
   RequestContext,
+  retryWithExponentialBackoff,
+  verifyContentMatch,
+  VerificationResult,
 } from "../../../utils/index.js";
 import * as chrono from "chrono-node";
 
@@ -67,6 +70,12 @@ export const UpdateTaskInputSchema = z.object({
     .describe(
       'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe(
+      "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
+    ),
 });
 
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
@@ -93,6 +102,8 @@ export interface UpdateTaskResponse {
     recurrence?: { from?: string; to?: string };
   };
   executionTime: string;
+  /** T1.3 — read-back verification result. */
+  verification?: VerificationResult;
 }
 
 /**
@@ -496,8 +507,40 @@ export async function obsidianUpdateTaskLogic(
     lines[lineNumber - 1] = newTaskLine;
     const updatedContent = lines.join('\n');
     
-    await obsidianService.updateFileContent(input.filePath, updatedContent, context);
-    
+    // T1.2 retry on the rewrite.
+    await retryWithExponentialBackoff(
+      () =>
+        obsidianService.updateFileContent(
+          input.filePath,
+          updatedContent,
+          context,
+        ),
+      {
+        operationName: "obsidian_update_task:write",
+        context,
+        errorContext: {
+          file: input.filePath,
+          lineNumber,
+          op: input.operation,
+        },
+      },
+    );
+
+    // T1.3: hash-verify post-write content matches what we sent.
+    const verification = await verifyContentMatch(
+      { kind: "filePath", path: input.filePath },
+      updatedContent,
+      obsidianService,
+      { ...context, operation: "verifyContentMatch" },
+    );
+    if (!verification.verified) {
+      throw new McpError(
+        BaseErrorCode.INTERNAL_ERROR,
+        `Task update reported success but read-back verification failed: ${verification.reason}`,
+        { ...context, verification_error: true, verification },
+      );
+    }
+
     const executionTime = `${Date.now() - startTime}ms`;
     
     logger.info("Task updated successfully", {
@@ -516,6 +559,7 @@ export async function obsidianUpdateTaskLogic(
       updatedTask: newTaskLine,
       changes,
       executionTime,
+      verification,
     };
 
   } catch (error) {

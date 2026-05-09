@@ -10,6 +10,9 @@ import {
   logger,
   RequestContext,
   retryWithDelay,
+  retryWithExponentialBackoff,
+  verifyDeletion,
+  VerificationResult,
 } from "../../../utils/index.js";
 
 // ====================================================================================
@@ -42,6 +45,13 @@ export const ObsidianDeleteFileInputSchema = z
       .describe(
         'The ID of the vault to delete from (e.g., "personal", "work"). If not specified, uses the default vault.',
       ),
+    /** T1.4 — optional idempotency UUID. */
+    idempotency_key: z
+      .string()
+      .optional()
+      .describe(
+        "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
+      ),
   })
   .describe(
     "Input parameters for permanently deleting a specific file within the connected Obsidian vault. Includes a case-insensitive path fallback.",
@@ -68,6 +78,8 @@ export interface ObsidianDeleteFileResponse {
   success: boolean;
   /** A human-readable message confirming the deletion and specifying the path used. */
   message: string;
+  /** T1.3 — read-back verification result (file should now return 404). */
+  verification?: VerificationResult;
 }
 
 // ====================================================================================
@@ -126,14 +138,15 @@ export const processObsidianDeleteFile = async (
       `Attempting to delete file (case-sensitive): ${originalFilePath}`,
       deleteContext,
     );
-    await retryWithDelay(
+    // T1.2: exponential-backoff retry on transient transport errors. NOT_FOUND
+    // is intentionally non-retryable here so we fall through to the
+    // case-insensitive fallback below.
+    await retryWithExponentialBackoff(
       () => obsidianService.deleteFile(originalFilePath, deleteContext),
       {
-        operationName: "deleteFile",
+        operationName: "obsidian_delete_file:primary",
         context: deleteContext,
-        maxRetries: 3,
-        delayMs: 300,
-        shouldRetry: shouldRetryNotFound,
+        errorContext: { file: originalFilePath, attempt: "case-sensitive" },
       },
     );
 
@@ -148,9 +161,28 @@ export const processObsidianDeleteFile = async (
         deleteContext,
       );
     }
+    // T1.3: confirm the file is actually gone post-delete.
+    const verification = await verifyDeletion(
+      { kind: "filePath", path: originalFilePath },
+      obsidianService,
+      { ...deleteContext, operation: "verifyDeletion" },
+    );
+    if (!verification.verified) {
+      logger.error(
+        `Delete verification failed for ${originalFilePath}: ${verification.reason}`,
+        undefined,
+        { ...deleteContext, verification },
+      );
+      throw new McpError(
+        BaseErrorCode.INTERNAL_ERROR,
+        `File '${originalFilePath}' delete reported success but the file is still readable.`,
+        { ...deleteContext, verification_error: true, reason: verification.reason },
+      );
+    }
     return {
       success: true,
       message: `File '${originalFilePath}' deleted successfully.`,
+      verification,
     };
   } catch (error) {
     // --- Attempt 2: Case-insensitive fallback if initial delete failed with NOT_FOUND ---
@@ -207,14 +239,16 @@ export const processObsidianDeleteFile = async (
             subOperation: "retryDelete",
             effectiveFilePath,
           };
-          await retryWithDelay(
+          // T1.2: exponential-backoff retry on the corrected path.
+          await retryWithExponentialBackoff(
             () => obsidianService.deleteFile(effectiveFilePath, retryContext),
             {
-              operationName: "deleteFileFallback",
+              operationName: "obsidian_delete_file:fallback",
               context: retryContext,
-              maxRetries: 3,
-              delayMs: 300,
-              shouldRetry: shouldRetryNotFound,
+              errorContext: {
+                file: effectiveFilePath,
+                attempt: "case-insensitive",
+              },
             },
           );
 
@@ -228,9 +262,27 @@ export const processObsidianDeleteFile = async (
               retryContext,
             );
           }
+          // T1.3 verify
+          const fallbackVerification = await verifyDeletion(
+            { kind: "filePath", path: effectiveFilePath },
+            obsidianService,
+            { ...retryContext, operation: "verifyDeletion" },
+          );
+          if (!fallbackVerification.verified) {
+            throw new McpError(
+              BaseErrorCode.INTERNAL_ERROR,
+              `File '${effectiveFilePath}' delete reported success but the file is still readable.`,
+              {
+                ...retryContext,
+                verification_error: true,
+                reason: fallbackVerification.reason,
+              },
+            );
+          }
           return {
             success: true,
             message: `File '${effectiveFilePath}' (found via case-insensitive match for '${originalFilePath}') deleted successfully.`,
+            verification: fallbackVerification,
           };
         } else if (matches.length > 1) {
           // Ambiguous match: Multiple files match case-insensitively

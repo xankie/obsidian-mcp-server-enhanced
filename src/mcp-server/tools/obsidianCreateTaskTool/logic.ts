@@ -12,6 +12,9 @@ import {
   ErrorHandler,
   logger,
   RequestContext,
+  retryWithExponentialBackoff,
+  verifyContentMatch,
+  VerificationResult,
 } from "../../../utils/index.js";
 import * as chrono from "chrono-node";
 
@@ -53,6 +56,12 @@ export const CreateTaskInputSchema = z.object({
     .describe(
       'The ID of the vault to write to (e.g., "personal", "work"). If not specified, uses the default vault.',
     ),
+  idempotency_key: z
+    .string()
+    .optional()
+    .describe(
+      "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
+    ),
 });
 
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
@@ -77,6 +86,8 @@ export interface CreateTaskResponse {
     recurrence?: string;
   };
   executionTime: string;
+  /** T1.3 — read-back verification result. */
+  verification?: VerificationResult;
 }
 
 /**
@@ -358,13 +369,32 @@ export async function obsidianCreateTaskLogic(
     lines.splice(lineNumber, 0, taskLine);
     const updatedContent = lines.join('\n');
     
-    // Step 6: Write the updated content
-    await obsidianService.updateFileContent(
-      targetFile,
-      updatedContent,
-      context
+    // Step 6: Write the updated content (T1.2 retry).
+    await retryWithExponentialBackoff(
+      () =>
+        obsidianService.updateFileContent(targetFile, updatedContent, context),
+      {
+        operationName: "obsidian_create_task:write",
+        context,
+        errorContext: { file: targetFile, lineNumber: lineNumber + 1 },
+      },
     );
-    
+
+    // T1.3: hash-verify post-write content matches what we sent.
+    const verification = await verifyContentMatch(
+      { kind: "filePath", path: targetFile },
+      updatedContent,
+      obsidianService,
+      { ...context, operation: "verifyContentMatch" },
+    );
+    if (!verification.verified) {
+      throw new McpError(
+        BaseErrorCode.INTERNAL_ERROR,
+        `Task write reported success but read-back verification failed: ${verification.reason}`,
+        { ...context, verification_error: true, verification },
+      );
+    }
+
     const executionTime = `${Date.now() - startTime}ms`;
     
     logger.info("Task created successfully", {
@@ -395,6 +425,7 @@ export async function obsidianCreateTaskLogic(
       formattedTask: taskLine,
       metadata,
       executionTime,
+      verification,
     };
 
   } catch (error) {
