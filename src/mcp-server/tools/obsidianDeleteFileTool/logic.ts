@@ -8,6 +8,7 @@ import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   expectedContentHashDescription,
+  HashMismatchError,
   logger,
   preflightContentHash,
   RequestContext,
@@ -15,6 +16,8 @@ import {
   retryWithExponentialBackoff,
   verifyDeletion,
   VerificationResult,
+  WriteLockTimeoutError,
+  WriteRetryExhaustedError,
 } from "../../../utils/index.js";
 
 // ====================================================================================
@@ -325,6 +328,15 @@ export const processObsidianDeleteFile = async (
           );
         }
       } catch (fallbackError) {
+        // Preserve T2 structured error types so the wrapper can render them as
+        // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+        if (
+          fallbackError instanceof HashMismatchError ||
+          fallbackError instanceof WriteLockTimeoutError ||
+          fallbackError instanceof WriteRetryExhaustedError
+        ) {
+          throw fallbackError;
+        }
         // Catch errors specifically from the fallback logic (e.g., listFiles error, retry delete error)
         if (fallbackError instanceof McpError) {
           // Log and re-throw known errors from fallback
@@ -350,6 +362,15 @@ export const processObsidianDeleteFile = async (
         }
       }
     } else {
+      // Preserve T2 structured error types so the wrapper can render them as
+      // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+      if (
+        error instanceof HashMismatchError ||
+        error instanceof WriteLockTimeoutError ||
+        error instanceof WriteRetryExhaustedError
+      ) {
+        throw error;
+      }
       // Re-throw errors from the initial delete attempt that were not NOT_FOUND or McpError
       if (error instanceof McpError) {
         logger.error(

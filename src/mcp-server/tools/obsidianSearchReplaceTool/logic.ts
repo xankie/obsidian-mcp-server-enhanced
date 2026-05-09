@@ -10,6 +10,7 @@ import {
   assertContentHash,
   createFormattedStatWithTokenCount,
   expectedContentHashDescription,
+  HashMismatchError,
   logger,
   RequestContext,
   retryWithDelay,
@@ -17,6 +18,8 @@ import {
   verifyContentMatch,
   VerificationResult,
   VerificationTarget,
+  WriteLockTimeoutError,
+  WriteRetryExhaustedError,
 } from "../../../utils/index.js";
 
 // ====================================================================================
@@ -515,6 +518,15 @@ export const processObsidianSearchReplace = async (
       );
     }
   } catch (error) {
+    // Preserve T2 structured error types so the wrapper can render them as
+    // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+    if (
+      error instanceof HashMismatchError ||
+      error instanceof WriteLockTimeoutError ||
+      error instanceof WriteRetryExhaustedError
+    ) {
+      throw error;
+    }
     // Catch and handle errors during the initial read phase
     if (error instanceof McpError) throw error; // Re-throw known McpErrors
     const errorMessage = `Unexpected error reading target ${targetDescription} before search/replace.`;
@@ -842,6 +854,15 @@ export const processObsidianSearchReplace = async (
         );
       }
     } catch (error) {
+      // Preserve T2 structured error types so the wrapper can render them as
+      // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+      if (
+        error instanceof HashMismatchError ||
+        error instanceof WriteLockTimeoutError ||
+        error instanceof WriteRetryExhaustedError
+      ) {
+        throw error;
+      }
       // Handle errors during the write phase
       if (error instanceof McpError) throw error; // Re-throw known McpErrors
       const errorMessage = `Unexpected error writing modified content to ${targetDescription}.`;

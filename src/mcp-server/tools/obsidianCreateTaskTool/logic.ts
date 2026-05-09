@@ -19,6 +19,8 @@ import {
   retryWithExponentialBackoff,
   verifyContentMatch,
   VerificationResult,
+  WriteLockTimeoutError,
+  WriteRetryExhaustedError,
 } from "../../../utils/index.js";
 import * as chrono from "chrono-node";
 
@@ -464,12 +466,22 @@ export async function obsidianCreateTaskLogic(
 
   } catch (error) {
     const executionTime = `${Date.now() - startTime}ms`;
-    
+
     logger.error("Task creation failed", {
       ...context,
       error: error instanceof Error ? error.message : String(error),
       executionTime,
     });
+
+    // Preserve T2 structured error types so the wrapper can render them as
+    // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+    if (
+      error instanceof HashMismatchError ||
+      error instanceof WriteLockTimeoutError ||
+      error instanceof WriteRetryExhaustedError
+    ) {
+      throw error;
+    }
 
     if (error instanceof McpError) {
       throw error;

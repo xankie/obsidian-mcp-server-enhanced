@@ -76,7 +76,84 @@ export interface RunWriteToolOptions<T> {
 /** Marker key tools may attach to their response payload to surface verification. */
 export const VERIFICATION_KEY = "verification";
 
+/**
+ * Per-key in-flight registry. When a duplicate idempotency UUID arrives while
+ * the original call is still executing, later arrivals await the original's
+ * promise and receive byte-identical results — closing the parallel-duplicate
+ * gap that a cache-lookup-then-execute pattern leaves open (the cache is only
+ * populated *after* the first call completes, so concurrent duplicates would
+ * otherwise all miss the cache and execute fresh, serialized only by the
+ * write lock).
+ *
+ * Keyed by `${toolName}::${idempotencyKey}`. The entry is removed in
+ * `finally` after the original call resolves, regardless of success or error,
+ * so subsequent (post-completion) retries with the same UUID hit the success
+ * cache (success path) or are free to retry fresh (error path — errors are
+ * not cached).
+ */
+const inFlightCalls = new Map<string, Promise<CallToolResult>>();
+
+function inFlightKey(toolName: string, idempotencyKey: string): string {
+  return `${toolName}::${idempotencyKey}`;
+}
+
 export async function runWriteTool<T extends object>(
+  opts: RunWriteToolOptions<T>,
+): Promise<CallToolResult> {
+  const { toolName, idempotencyKey, context } = opts;
+
+  const useIdempotency =
+    typeof idempotencyKey === "string" && idempotencyKey.length > 0;
+
+  if (!useIdempotency) {
+    return executeWriteTool(opts);
+  }
+
+  // ---- T1.4 + parallel-duplicate fix: cache lookup, then in-flight join. ----
+  const store = getIdempotencyStore();
+  const lookup = store.lookup<CallToolResult>(toolName, idempotencyKey!);
+  if (lookup.hit) {
+    logger.info(
+      `Idempotency hit for ${toolName} (key=${idempotencyKey}); returning cached result.`,
+      { ...context, operation: "IdempotencyHit", toolName },
+    );
+    // Return the cached MCP response verbatim so the client sees identical bytes.
+    return lookup.entry.result;
+  }
+
+  const key = inFlightKey(toolName, idempotencyKey!);
+  const pending = inFlightCalls.get(key);
+  if (pending) {
+    logger.info(
+      `Idempotency in-flight join for ${toolName} (key=${idempotencyKey}); awaiting original call.`,
+      { ...context, operation: "IdempotencyInFlightJoin", toolName },
+    );
+    // Original call is still executing — await its promise and return the
+    // exact CallToolResult it produces. Same bytes for every concurrent
+    // duplicate, by construction.
+    return pending;
+  }
+
+  // First call for this UUID. Register its promise *before* awaiting so any
+  // concurrent duplicate that arrives while we're executing finds it.
+  const promise = (async () => {
+    try {
+      return await executeWriteTool(opts);
+    } finally {
+      inFlightCalls.delete(key);
+    }
+  })();
+  inFlightCalls.set(key, promise);
+  return promise;
+}
+
+/**
+ * Inner runner: lock + handler + success/error structured-response mapping +
+ * idempotency-cache store. Always resolves with a CallToolResult (errors are
+ * converted, never thrown). The outer `runWriteTool` wraps this in the cache
+ * lookup + in-flight registry to dedupe concurrent duplicates.
+ */
+async function executeWriteTool<T extends object>(
   opts: RunWriteToolOptions<T>,
 ): Promise<CallToolResult> {
   const {
@@ -88,22 +165,9 @@ export async function runWriteTool<T extends object>(
     lockKey,
   } = opts;
 
-  // ---- T1.4: idempotency lookup ----
   const store = getIdempotencyStore();
   const useIdempotency =
     typeof idempotencyKey === "string" && idempotencyKey.length > 0;
-
-  if (useIdempotency) {
-    const lookup = store.lookup<CallToolResult>(toolName, idempotencyKey!);
-    if (lookup.hit) {
-      logger.info(
-        `Idempotency hit for ${toolName} (key=${idempotencyKey}); returning cached result.`,
-        { ...context, operation: "IdempotencyHit", toolName },
-      );
-      // Return the cached MCP response verbatim so the client sees identical bytes.
-      return lookup.entry.result;
-    }
-  }
 
   const startedAt = Date.now();
 
@@ -197,7 +261,9 @@ export async function runWriteTool<T extends object>(
 
     // Errors are NOT cached under idempotency keys — a retry with the same
     // UUID after a transport failure should be allowed to actually retry the
-    // write rather than re-receive the failure.
+    // write rather than re-receive the failure. (Concurrent duplicates that
+    // joined the in-flight promise still receive these identical error
+    // bytes; that's correct — they were "the same call".)
     return callToolResult;
   }
 }

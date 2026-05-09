@@ -8,6 +8,7 @@ import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   createFormattedStatWithTokenCount,
   expectedContentHashDescription,
+  HashMismatchError,
   logger,
   preflightContentHash,
   RequestContext,
@@ -16,6 +17,8 @@ import {
   verifyContentMatch,
   VerificationResult,
   VerificationTarget,
+  WriteLockTimeoutError,
+  WriteRetryExhaustedError,
 } from "../../../utils/index.js";
 
 // ====================================================================================
@@ -886,6 +889,15 @@ export const processObsidianUpdateFile = async (
 
     return response;
   } catch (error) {
+    // Preserve T2 structured error types so the wrapper can render them as
+    // hash_mismatch / lock_timeout / retry_exhausted instead of internal_error.
+    if (
+      error instanceof HashMismatchError ||
+      error instanceof WriteLockTimeoutError ||
+      error instanceof WriteRetryExhaustedError
+    ) {
+      throw error;
+    }
     // Handle errors, ensuring they are McpError instances before re-throwing.
     // Errors from obsidianService calls should already be McpErrors and logged by the service.
     if (error instanceof McpError) {
