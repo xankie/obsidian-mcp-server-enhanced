@@ -6,5 +6,8 @@ export * from "./structuredError.js";
 export * from "./writeRetry.js";
 export * from "./idempotencyStore.js";
 export * from "./writeVerification.js";
+export * from "./contentHashPreflight.js";
+export * from "./writeLock.js";
+export * from "./snapshotRestore.js";
 export * from "./keepalive.js";
 export * from "./writeToolWrapper.js";

@@ -9,7 +9,11 @@ import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  assertContentHash,
+  buildStructuredError,
   ErrorHandler,
+  expectedContentHashDescription,
+  HashMismatchError,
   logger,
   RequestContext,
   retryWithExponentialBackoff,
@@ -62,6 +66,10 @@ export const CreateTaskInputSchema = z.object({
     .describe(
       "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
     ),
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
@@ -352,15 +360,41 @@ export async function obsidianCreateTaskLogic(
     
     // Step 3: Get current file content
     let currentContent = "";
+    let fileExisted = false;
     try {
       const fileContent = await obsidianService.getFileContent(targetFile, "markdown", context);
       currentContent = typeof fileContent === "string" ? fileContent : fileContent.content;
+      fileExisted = true;
     } catch (error) {
       // File might not exist, which is fine - we'll create it
       logger.info(`File ${targetFile} doesn't exist, will create new file`, context);
       currentContent = "";
     }
-    
+
+    // T2.3: pre-flight hash check.
+    if (input.expected_content_hash) {
+      if (!fileExisted) {
+        // Caller expected a specific prior state but the file is missing.
+        throw new HashMismatchError(
+          buildStructuredError(
+            "hash_mismatch",
+            `File '${targetFile}' does not exist; expected_content_hash cannot be satisfied.`,
+            {
+              operation: "preflightContentHash",
+              file: targetFile,
+              expected_hash: input.expected_content_hash,
+            },
+          ),
+        );
+      }
+      assertContentHash(
+        currentContent,
+        input.expected_content_hash,
+        targetFile,
+        context,
+      );
+    }
+
     // Step 4: Find insertion point
     const { lineNumber, content } = findInsertionPoint(currentContent, input);
     

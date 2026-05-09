@@ -7,7 +7,10 @@ import {
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  assertContentHash,
+  expectedContentHashDescription,
   logger,
+  preflightContentHash,
   RequestContext,
   retryWithDelay,
   retryWithExponentialBackoff,
@@ -56,6 +59,10 @@ const ManageFrontmatterInputSchemaBase = z.object({
     .describe(
       "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
     ),
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 export const ObsidianManageFrontmatterInputSchemaShape =
@@ -143,6 +150,13 @@ export const processObsidianManageFrontmatter = async (
     }
 
     case "set": {
+      // T2.3: pre-flight hash check (extra GET — patch path doesn't read).
+      await preflightContentHash(
+        { kind: "filePath", path: filePath },
+        params.expected_content_hash,
+        obsidianService,
+        { ...context, operation: "preflightContentHash" },
+      );
       const patchOptions: PatchOptions = {
         operation: "replace",
         targetType: "frontmatter",
@@ -206,6 +220,13 @@ export const processObsidianManageFrontmatter = async (
         context,
         "markdown",
       )) as string;
+      // T2.3: pre-flight hash check on the markdown form.
+      assertContentHash(
+        noteContent,
+        params.expected_content_hash,
+        filePath,
+        context,
+      );
 
       const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
       const match = noteContent.match(frontmatterRegex);

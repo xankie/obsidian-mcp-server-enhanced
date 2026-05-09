@@ -7,7 +7,9 @@ import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
   createFormattedStatWithTokenCount,
+  expectedContentHashDescription,
   logger,
+  preflightContentHash,
   RequestContext,
   retryWithDelay,
   retryWithExponentialBackoff,
@@ -112,6 +114,11 @@ const WholeFileUpdateSchema = BaseUpdateSchema.extend({
     .optional()
     .default(false)
     .describe("If true, returns the final file content in the response."),
+  /** T2.3 — optional pre-flight hash check. Mirrors the registration schema so it survives refined parsing. */
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 // ====================================================================================
@@ -185,6 +192,11 @@ const ObsidianUpdateFileRegistrationSchema = z
       .describe(
         "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call is a no-op and returns the cached result. Closes delete+rewrite race conditions on retry.",
       ),
+    /** T2.3 — optional pre-flight hash check. */
+    expected_content_hash: z
+      .string()
+      .optional()
+      .describe(expectedContentHashDescription),
   })
   .describe(
     "Tool to modify Obsidian notes (specified by file path, active file, or periodic note) using whole-file operations: 'append', 'prepend', or 'overwrite'. Options control creation and overwrite behavior.",
@@ -535,6 +547,25 @@ export const processObsidianUpdateFile = async (
       `Operation will proceed. File creation needed: ${wasCreated}`,
       safetyCheckContext,
     );
+
+    // --- T2.3: Pre-flight hash check (only when modifying existing content) ---
+    // If the file is being created fresh, there is no prior content to hash
+    // against, so the check is meaningfully a no-op even if the caller passed
+    // a hash.
+    if (existsBefore && params.expected_content_hash) {
+      const preflightTarget: VerificationTarget =
+        params.targetType === "filePath" && targetId
+          ? { kind: "filePath", path: targetId }
+          : params.targetType === "activeFile"
+            ? { kind: "activeFile" }
+            : { kind: "periodicNote", period: targetPeriod! };
+      await preflightContentHash(
+        preflightTarget,
+        params.expected_content_hash,
+        obsidianService,
+        { ...context, operation: "preflightContentHash" },
+      );
+    }
 
     // --- Step 3: Perform the Update Operation via Obsidian API ---
     const updateContext = {

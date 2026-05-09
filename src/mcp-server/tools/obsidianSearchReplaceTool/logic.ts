@@ -7,7 +7,9 @@ import {
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  assertContentHash,
   createFormattedStatWithTokenCount,
+  expectedContentHashDescription,
   logger,
   RequestContext,
   retryWithDelay,
@@ -131,6 +133,11 @@ const BaseObsidianSearchReplaceInputSchema = z.object({
     .describe(
       "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call is a no-op and returns the cached result.",
     ),
+  /** T2.3 — optional pre-flight hash check. */
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 // ====================================================================================
@@ -522,6 +529,16 @@ export const processObsidianSearchReplace = async (
       readContext,
     );
   }
+
+  // --- T2.3: Pre-flight hash check on the just-read content ---
+  // If the caller passed expected_content_hash, abort here on mismatch so we
+  // never overwrite a concurrent modification.
+  assertContentHash(
+    originalContent,
+    params.expected_content_hash,
+    targetDescription,
+    context,
+  );
 
   // --- Step 2: Perform Sequential Replacements ---
   let modifiedContent = originalContent;

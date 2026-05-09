@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  buildWriteLockKey,
   ErrorHandler,
   logger,
   RequestContext,
@@ -56,6 +57,13 @@ export const registerObsidianManageFrontmatterTool = async (
           return await runWriteTool({
             toolName,
             idempotencyKey: params.idempotency_key,
+            // 'get' is read-only and doesn't need serialization, but locking
+            // a read against a concurrent write is harmless and keeps the
+            // wiring uniform across operations.
+            lockKey:
+              params.operation === "get"
+                ? undefined
+                : buildWriteLockKey(params.vault, params.filePath),
             context: handlerContext,
             errorContext: {
               file: params.filePath,

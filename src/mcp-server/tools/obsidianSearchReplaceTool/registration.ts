@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  buildWriteLockKey,
   ErrorHandler,
   logger,
   RequestContext,
@@ -97,6 +98,14 @@ export const registerObsidianSearchReplaceTool = async (
           return await runWriteTool({
             toolName,
             idempotencyKey: params.idempotency_key,
+            lockKey: buildWriteLockKey(
+              params.vault,
+              params.targetType === "filePath"
+                ? params.targetIdentifier
+                : params.targetType === "activeFile"
+                  ? "__active__"
+                  : `__periodic_${params.targetIdentifier ?? "unknown"}__`,
+            ),
             context: handlerContext,
             errorContext: {
               file: params.targetIdentifier,

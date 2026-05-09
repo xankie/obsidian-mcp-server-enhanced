@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  buildWriteLockKey,
   ErrorHandler,
   logger,
   RequestContext,
@@ -143,6 +144,7 @@ This tool provides extensive task modification capabilities with precise task id
           return await runWriteTool({
             toolName,
             idempotencyKey: params.idempotency_key,
+            lockKey: buildWriteLockKey(params.vault, params.filePath),
             context: handlerContext,
             errorContext: {
               file: params.filePath,

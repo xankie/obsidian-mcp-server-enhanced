@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  buildWriteLockKey,
   ErrorHandler,
   logger,
   RequestContext,
@@ -127,6 +128,19 @@ This tool creates properly formatted tasks with comprehensive metadata support, 
           return await runWriteTool({
             toolName,
             idempotencyKey: params.idempotency_key,
+            // Best-effort lock key based on caller-supplied target. The
+            // logic resolves the actual file path at runtime; we lock on
+            // the user-visible identifier they provided.
+            lockKey: buildWriteLockKey(
+              params.vault,
+              params.filePath
+                ? params.filePath
+                : params.useActiveFile
+                  ? "__active__"
+                  : params.usePeriodicNote
+                    ? `__periodic_${params.usePeriodicNote}__`
+                    : undefined,
+            ),
             context: handlerContext,
             errorContext: {
               file: params.filePath,

@@ -6,6 +6,8 @@ import {
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  assertContentHash,
+  expectedContentHashDescription,
   logger,
   RequestContext,
   retryWithDelay,
@@ -48,6 +50,10 @@ const ManageTagsInputSchemaBase = z.object({
     .describe(
       "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
     ),
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 export const ObsidianManageTagsInputSchemaShape =
@@ -143,6 +149,13 @@ export const processObsidianManageTags = async (
         context,
         "markdown",
       )) as string;
+      // T2.3: pre-flight hash check on the markdown form.
+      assertContentHash(
+        noteContent,
+        params.expected_content_hash,
+        filePath,
+        context,
+      );
       const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
       const match = noteContent.match(frontmatterRegex);
       const newFrontmatterString = dump(frontmatter);
@@ -207,6 +220,13 @@ export const processObsidianManageTags = async (
       }
 
       let noteContent = (await getFileWithRetry(context, "markdown")) as string;
+      // T2.3: pre-flight hash check on the markdown form.
+      assertContentHash(
+        noteContent,
+        params.expected_content_hash,
+        filePath,
+        context,
+      );
       const frontmatter = initialNote.frontmatter ?? {};
       let frontmatterTags: string[] = Array.isArray(frontmatter.tags)
         ? frontmatter.tags

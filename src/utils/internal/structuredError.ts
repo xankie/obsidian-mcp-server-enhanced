@@ -15,6 +15,8 @@ export type StructuredErrorType =
   | "timeout"
   | "connection_lost"
   | "verification_failed"
+  | "hash_mismatch"
+  | "lock_timeout"
   | "validation_error"
   | "not_found"
   | "conflict"
@@ -44,6 +46,8 @@ const RETRY_SAFE_BY_TYPE: Record<StructuredErrorType, boolean> = {
   timeout: true,
   connection_lost: true,
   verification_failed: false,
+  hash_mismatch: false,
+  lock_timeout: true,
   validation_error: false,
   not_found: false,
   conflict: false,
@@ -64,6 +68,10 @@ const SUGGESTED_FIX_BY_TYPE: Record<StructuredErrorType, string | null> = {
     "Network/transport failure to the Obsidian REST API. Confirm the plugin is running and Tailscale Funnel is up, then retry.",
   verification_failed:
     "Write reported success but read-back hash did not match the expected state. Re-read the file to determine actual state before retrying.",
+  hash_mismatch:
+    "The file changed between the caller's last read and this write. Re-read the file, recompute expected_content_hash from the fresh content, then retry.",
+  lock_timeout:
+    "Another write to this file is in progress and did not release within the timeout window. Retry shortly.",
   validation_error:
     "Tool inputs failed schema validation. Check parameter names, types, and required fields.",
   not_found:

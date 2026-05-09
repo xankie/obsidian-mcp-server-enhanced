@@ -1,19 +1,39 @@
 /**
- * @fileoverview T1.2/T1.3/T1.4/T1.5 — High-order wrapper applied to every
- * write-capable MCP tool's request handler.
+ * @fileoverview T1.2/T1.3/T1.4/T1.5 + T2.2 — High-order wrapper applied to
+ * every write-capable MCP tool's request handler.
  *
  * Pipeline (in order):
  *   1. T1.4 idempotency — UUID lookup, cached MCP response on hit.
- *   2. Inner handler runs (which itself uses retryWithExponentialBackoff at
- *      the API-call sites and calls verifyContentMatch / verifyDeletion).
- *   3. T1.5 success path — annotate response with verification metadata if
- *      the inner handler attached `__verification`, and store under UUID.
- *   4. T1.5 error path — every thrown error is mapped to a structured error
- *      response. No silent fails, no raw McpError leaking through.
+ *   2. T2.2 lock acquisition — when `lockKey` is set, the handler runs
+ *      inside `acquireWriteLock`, serializing concurrent writes on the
+ *      same key (in-process mutex + cross-process temp-dir lock file with
+ *      30s stale-takeover policy).
+ *   3. Inner handler runs (which itself uses retryWithExponentialBackoff at
+ *      the API-call sites, optionally calls preflightContentHash /
+ *      assertContentHash for T2.3 hash pre-flight, and calls
+ *      verifyContentMatch / verifyDeletion for T1.3 readback).
+ *   4. T1.5 success path — annotate response with verification metadata if
+ *      the inner handler attached it, and store under the idempotency UUID.
+ *   5. T1.5 error path — every thrown error (including T2.2
+ *      WriteLockTimeoutError and T2.3 HashMismatchError) is mapped to a
+ *      structured error response. No silent fails, no raw McpError leaking
+ *      through.
+ *
+ * **T2.1 transaction semantics (no separate wrapper code).** Every current
+ * write tool issues at most one PUT per invocation, with all in-memory
+ * composition (search/replace, frontmatter edits, tag edits, task edits)
+ * computed before the PUT. A throw mid-composition exits before the PUT,
+ * leaving the vault file untouched — the "no partial state" property of
+ * T2.1's spec is satisfied by construction. For future multi-PUT tools,
+ * use `withSnapshotRestore` from `./snapshotRestore.ts` for best-effort
+ * compensation on mid-sequence failure.
  *
  * Usage in registration.ts:
  *   const result = await runWriteTool({
- *     toolName, idempotencyKey, context,
+ *     toolName,
+ *     idempotencyKey: params.idempotency_key,
+ *     lockKey: buildWriteLockKey(params.vault, params.filePath),
+ *     context,
  *     handler: async () => processObsidianFooBar(validatedParams, context, vm),
  *   });
  *   return result;  // already a CallToolResult
@@ -22,6 +42,7 @@
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpError } from "../../types-global/errors.js";
+import { HashMismatchError } from "./contentHashPreflight.js";
 import { getIdempotencyStore } from "./idempotencyStore.js";
 import { logger } from "./logger.js";
 import { RequestContext } from "./requestContext.js";
@@ -31,6 +52,7 @@ import {
   fromUnknown,
   isStructuredError,
 } from "./structuredError.js";
+import { acquireWriteLock, WriteLockTimeoutError } from "./writeLock.js";
 import { WriteRetryExhaustedError } from "./writeRetry.js";
 
 export interface RunWriteToolOptions<T> {
@@ -42,6 +64,13 @@ export interface RunWriteToolOptions<T> {
   handler: () => Promise<T>;
   /** Targets used in error context if the handler throws before logging it. */
   errorContext?: Record<string, unknown>;
+  /**
+   * T2.2 — optional write lock key. When provided, the handler runs inside
+   * `acquireWriteLock(lockKey, ...)` so concurrent writes on the same key
+   * are serialized. Tools build keys like `${vaultId}:${filePath}`; pass
+   * `undefined` for tools without a stable file identifier (e.g. activeFile).
+   */
+  lockKey?: string;
 }
 
 /** Marker key tools may attach to their response payload to surface verification. */
@@ -56,6 +85,7 @@ export async function runWriteTool<T extends object>(
     context,
     handler,
     errorContext = {},
+    lockKey,
   } = opts;
 
   // ---- T1.4: idempotency lookup ----
@@ -78,7 +108,12 @@ export async function runWriteTool<T extends object>(
   const startedAt = Date.now();
 
   try {
-    const responseObj = await handler();
+    // T2.2: serialize concurrent writes on the same lockKey. When no
+    // lockKey is supplied, run the handler directly (e.g. tools targeting
+    // the active file have no stable identifier to lock on).
+    const responseObj = lockKey
+      ? await acquireWriteLock(lockKey, handler, context)
+      : await handler();
     const elapsed_ms = Date.now() - startedAt;
 
     // ---- T1.5 success path ----
@@ -110,6 +145,10 @@ export async function runWriteTool<T extends object>(
     let structured: StructuredError;
 
     if (err instanceof WriteRetryExhaustedError) {
+      structured = err.structured;
+    } else if (err instanceof HashMismatchError) {
+      structured = err.structured;
+    } else if (err instanceof WriteLockTimeoutError) {
       structured = err.structured;
     } else if (err instanceof McpError) {
       structured = fromMcpError(err, {

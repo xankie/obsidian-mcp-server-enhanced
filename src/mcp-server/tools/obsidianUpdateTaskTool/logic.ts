@@ -9,7 +9,9 @@ import { ObsidianRestApiService } from "../../../services/obsidianRestAPI/index.
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  assertContentHash,
   ErrorHandler,
+  expectedContentHashDescription,
   logger,
   RequestContext,
   retryWithExponentialBackoff,
@@ -76,6 +78,10 @@ export const UpdateTaskInputSchema = z.object({
     .describe(
       "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
     ),
+  expected_content_hash: z
+    .string()
+    .optional()
+    .describe(expectedContentHashDescription),
 });
 
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
@@ -443,7 +449,15 @@ export async function obsidianUpdateTaskLogic(
     // Step 1: Get current file content
     const fileContent = await obsidianService.getFileContent(input.filePath, "markdown", context);
     const content = typeof fileContent === "string" ? fileContent : fileContent.content;
-    
+
+    // T2.3: pre-flight hash check on the markdown form.
+    assertContentHash(
+      content,
+      input.expected_content_hash,
+      input.filePath,
+      context,
+    );
+
     // Step 2: Find the task line
     const { lineNumber, taskLine } = findTaskLine(content, input);
     const parsed = parseTaskLine(taskLine);

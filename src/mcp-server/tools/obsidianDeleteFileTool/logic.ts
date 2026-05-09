@@ -7,7 +7,9 @@ import {
 import { VaultManager } from "../../../services/vaultManager/index.js";
 import { BaseErrorCode, McpError } from "../../../types-global/errors.js";
 import {
+  expectedContentHashDescription,
   logger,
+  preflightContentHash,
   RequestContext,
   retryWithDelay,
   retryWithExponentialBackoff,
@@ -52,6 +54,11 @@ export const ObsidianDeleteFileInputSchema = z
       .describe(
         "Optional client-supplied UUID. If the same key is sent twice within 60s, the second call returns the cached result.",
       ),
+    /** T2.3 — optional pre-flight hash check. */
+    expected_content_hash: z
+      .string()
+      .optional()
+      .describe(expectedContentHashDescription),
   })
   .describe(
     "Input parameters for permanently deleting a specific file within the connected Obsidian vault. Includes a case-insensitive path fallback.",
@@ -137,6 +144,15 @@ export const processObsidianDeleteFile = async (
     logger.debug(
       `Attempting to delete file (case-sensitive): ${originalFilePath}`,
       deleteContext,
+    );
+    // T2.3: pre-flight hash check before delete. A NOT_FOUND from this read
+    // falls through to the case-insensitive fallback below; a hash mismatch
+    // aborts immediately.
+    await preflightContentHash(
+      { kind: "filePath", path: originalFilePath },
+      params.expected_content_hash,
+      obsidianService,
+      { ...deleteContext, operation: "preflightContentHash" },
     );
     // T1.2: exponential-backoff retry on transient transport errors. NOT_FOUND
     // is intentionally non-retryable here so we fall through to the
@@ -239,6 +255,13 @@ export const processObsidianDeleteFile = async (
             subOperation: "retryDelete",
             effectiveFilePath,
           };
+          // T2.3: hash check against the case-corrected path before delete.
+          await preflightContentHash(
+            { kind: "filePath", path: effectiveFilePath },
+            params.expected_content_hash,
+            obsidianService,
+            { ...retryContext, operation: "preflightContentHash" },
+          );
           // T1.2: exponential-backoff retry on the corrected path.
           await retryWithExponentialBackoff(
             () => obsidianService.deleteFile(effectiveFilePath, retryContext),
